@@ -319,11 +319,15 @@ elif [ "${command}" == "policy" ]; then
     echo ""
 
   elif [ "${arg1}" == "generate" ]; then
+    dir_name=$(dirname ${assume_role_policy_json_file_path})
+    [ ! -d ${dir_name} ] && mkdir ${dir_name}
     echo "==== Policy for EKS admin role ===="
     echo $(get_assume_role_policy_json) | jq . | tee "${assume_role_policy_json_file_path}"
     echo "To >>> ${assume_role_policy_json_file_path}"
     echo ""
 
+    dir_name=$(dirname ${eks_cluster_creator_policy_json_path})
+    [ ! -d ${dir_name} ] && mkdir ${dir_name}
     echo "==== Policy for attaching to EKS admin role ===="
     echo $(get_eks_cluster_creator_policy_json) | jq . | tee "${eks_cluster_creator_policy_json_path}"
     echo "To >>> ${eks_cluster_creator_policy_json_path}"
