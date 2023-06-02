@@ -1,0 +1,429 @@
+#!/usr/bin/env bash
+
+# set -x
+
+green="\033[32m"
+textreset="\033[m"
+
+cmdname=$(basename ${0})
+
+# The profile of an AWS administrator who can create IAM policies and attach them
+aws_profile_administrator="AdministratorAccess"
+
+# The profile of an EKS administrator that assumes a specific role
+aws_profile_eks_admin="EKSClusterAdminAccess"
+
+# The name of the policy created using the `aws iam create-policy` command
+eks_cluster_creator_role_name="EKSClusterCreator"
+# The name of the policy attached to the ${eks_cluster_creator_role_name}
+eks_cluster_creator_role_policy_name="EKSClusterCreatorPolicy"
+
+# This file name of the policy generated with the `eks-admin policy generate` command
+assume_role_policy_json_file_path="./output/assume-role-policy.json"
+eks_cluster_creator_policy_json_path="./output/eks-cluster-creator-policy.json"
+
+eks_version="1.26"
+eks_cluster_name="eks-from-eksctl"
+eks_cluster_region="ap-northeast-1"
+eks_cluster_nodegroup_name="workers"
+eks_cluster_node_instance_type="t3.medium"
+eks_cluster_nodes_num=2
+eks_cluster_nodes_min=1
+eks_cluster_nodes_max=4
+
+ssh_public_key_path="${HOME}/.ssh/eks/id_ed25519.pub"
+
+
+################
+# functions
+################
+usage() {
+    cat <<EOS
+
+Usage:
+  ${cmdname} [OPTIONS] COMMAND
+
+Common Commands:
+  login        Login to AWS using specified profile
+  policy       Create or delete policy(json) for EKS cluster
+  role         Create or delete role for EKS cluster
+  cluster      Create or delete EKS cluster
+
+OPTIONS:
+  -h           Show this help text
+
+EOS
+}
+
+get_account() {
+  local aws_profile=${aws_profile_eks_admin}
+  if [ "${1}" == "admin" ]; then
+    aws_profile=${aws_profile_administrator}
+  fi
+  # e.g. 123456789012
+  local account=$(aws sts get-caller-identity --query Account --output text --profile ${aws_profile})
+  if [ $? != 0 ]; then
+    echo "Failed to get account number" >&2
+    return 1
+  fi
+
+  echo ${account}
+}
+
+get_credential_vars_for_eksadmin() {
+  local account=$(get_account)
+  if [ "${account}" == "" ]; then
+    return 1
+  fi
+
+  local rolearn="arn:aws:iam::${account}:role/${eks_cluster_creator_role_name}"
+  # {"AccessKeyId":"XXXXXXXXXXXXXXXXXXXX","SecretAccessKey":"****************************************","SessionToken":"***==","Expiration":"2099-99-99T99:99:99+99:99"}
+  local creds=$(aws --profile ${aws_profile_eks_admin} sts assume-role --role-arn ${rolearn} --role-session-name "create-eks-cluster" --query 'Credentials')
+
+  if [ $? = 0 ]; then
+    echo ${creds}
+  fi
+}
+
+get_accounting_role() {
+  # arn:aws:sts::123456789012:assumed-role/Accounting-Role/JaneDoe
+  local sts_identity=$(aws sts get-caller-identity --query Arn --output text --profile ${aws_profile_eks_admin})
+  if [ $? == 0 ]; then
+    # Accounting-Role
+    echo $(echo ${sts_identity} | cut -d/ -f2)
+  fi
+}
+
+get_assume_role_policy_json() {
+  local account=$(get_account)
+  if [ "${account}" == "" ]; then
+    echo "Failed to get arn of EKS admin profile" >&2
+    echo "Please login with EKS admin" >&2
+    echo -e "You can use \`${green}${cmdname} login eksadmin${textreset}\`" >&2
+    return 1
+  fi
+  local accounting_role=$(get_accounting_role)
+  if [ "${accounting_role}" == "" ]; then
+    return 1
+  fi
+
+  echo $(cat <<EOS
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::${account}:role/aws-reserved/sso.amazonaws.com/${eks_cluster_region}/${accounting_role}"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+EOS
+  ) 
+}
+
+get_eks_cluster_creator_policy_json () {
+  echo $(cat <<EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "eks:*",
+                "iam:*",
+                "cloudformation:*",
+                "ec2:*",
+                "autoscaling:*",
+                "ssm:*",
+                "kms:*",
+                "sts:GetCallerIdentity"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+EOF
+  )
+}
+
+create_eks_admin_role() {
+  if [ ! -f "${assume_role_policy_json_file_path}" -a -f $"${eks_cluster_creator_policy_json_path}" ]; then
+    echo "Failed to find policy json to create eks admin role and eks admin policy" >&2
+    echo -e "You can use \`${green}${cmdname} policy generate${textreset}\`" >&2
+  fi
+
+  # Create an EKS admin role
+  aws --profile ${aws_profile_administrator} iam create-role --role-name ${eks_cluster_creator_role_name} --assume-role-policy-document file://"${assume_role_policy_json_file_path}"
+  if [ $? != 0 ]; then
+    echo "Failed to create EKS admin role" >&2
+    echo "Please login with administrator" >&2
+    echo -e "You can use \`${green}${cmdname} login admin${textreset}\`" >&2
+    return 1
+  fi
+
+  # Create an EKS admin's policy for attach to the eks admin role
+  aws --profile ${aws_profile_administrator} iam create-policy --policy-name ${eks_cluster_creator_role_policy_name} --policy-document file://"${eks_cluster_creator_policy_json_path}"
+  if [ $? != 0 ]; then
+    echo "Failed to create EKS admin's policy for attach to eks administrator" >&2
+    echo "Please login with administrator" >&2
+    echo -e "You can use \`${green}${cmdname} login admin${textreset}\`" >&2
+    return 1
+  fi
+
+  # Attach the policy to the EKS admin role
+  local account=$(get_account admin)
+  if [ "${account}" == "" ]; then
+    return 1
+  fi
+  aws --profile ${aws_profile_administrator} iam attach-role-policy --policy-arn arn:aws:iam::${account}:policy/${eks_cluster_creator_role_policy_name} --role-name ${eks_cluster_creator_role_name}
+  if [ $? != 0 ]; then
+    echo "Failed to attach policy to EKS admin role" >&2
+    echo "Please login with administrator" >&2
+    echo -e "You can use \`${green}${cmdname} login admin${textreset}\`" >&2
+    return 1
+  fi
+}
+
+
+delete_eks_admin_role() {
+  # Detach the policy from EKS admin role
+  local account=$(get_account admin)
+  if [ "${account}" == "" ]; then
+    return 1
+  fi
+  aws --profile ${aws_profile_administrator} iam detach-role-policy --policy-arn arn:aws:iam::${account}:policy/${eks_cluster_creator_role_policy_name} --role-name ${eks_cluster_creator_role_name}
+  if [ $? != 0 ]; then
+    echo "Failed to detach policy from EKS admin role" >&2
+    return 1
+  fi
+
+  # Delete the EKS admin's policy which was attached to eks administrator
+  aws --profile ${aws_profile_administrator} iam delete-policy --policy-arn arn:aws:iam::${account}:policy/${eks_cluster_creator_role_policy_name}
+  if [ $? != 0 ]; then
+    echo "Failed to delete EKS admin's policy which was attached to eks administrator" >&2
+    return 1
+  fi
+
+  # Delete the EKS admin role
+  aws --profile ${aws_profile_administrator} iam delete-role --role-name ${eks_cluster_creator_role_name}
+  if [ $? != 0 ]; then
+    echo "Failed to delete EKS admin role" >&2
+    return 1
+  fi
+}
+
+get_eks_admin_identity() {
+  local account=$(get_account)
+  if [ "${account}" == "" ]; then
+    return 1
+  fi
+
+  local accounting_role=$(get_accounting_role)
+  if [ "${accounting_role}" == "" ]; then
+    return 1
+  fi
+
+  echo "arn:aws:iam::${account}:role/${accounting_role}"
+}
+
+do_mapping_iam_and_clusterrole() {
+  eks_admin_identity=$(get_eks_admin_identity)
+  if [ "${eks_admin_identity}" == "" ]; then
+    echo "Failed to get eks admin identity(arn) to mapping EKS administrator's service account" >&2
+    echo "It's require to execute with logged in with eksadmin" >&2
+    echo -e "You can use \`${green}${cmdname} login eksadmin${textreset}\` command" >&2
+    exit 1
+  fi
+
+  # Make ${aws_profile_eks_admin} cluster admin
+  eksctl create iamidentitymapping \
+    --cluster ${eks_cluster_name} \
+    --arn ${eks_admin_identity} \
+    --username cluster-admin \
+    --group system:masters
+}
+
+update_kubeconfig() {
+  # Update `~/.kube/config` for kubectl
+  aws eks update-kubeconfig --name ${eks_cluster_name} --profile ${aws_profile_eks_admin}
+}
+
+
+################
+# options
+################
+while getopts h OPT
+do
+  case ${OPT} in
+    h)
+      usage
+      exit 0
+      ;;
+  esac
+done
+
+shift $(expr $OPTIND - 1)
+
+
+################
+# arguments
+################
+command=${1}
+arg1=${2}
+
+if [ "${command}" == "" ]; then
+  usage
+  exit 0
+fi
+
+
+################
+# main
+################
+
+if [ "${command}" == "login" ]; then
+  if [ "${arg1}" == "admin" ]; then
+    aws --profile ${aws_profile_administrator} sso login
+  elif [ "${arg1}" == "eksadmin" ]; then
+    aws --profile ${aws_profile_eks_admin} sso login
+  else
+    if [ "${arg1}" == "" ]; then
+      echo "ROLE is required" >&2
+    else
+      echo "ROLE ${arg1} is not supported" >&2
+    fi
+    cat <<EOS
+
+Usage:
+  ${cmdname} ${command} ROLE
+
+ROLE:
+  admin        Role of AWS Administrator
+  eksadmin     Role of EKS cluster's administrator
+
+EOS
+    exit 1
+  fi
+
+elif [ "${command}" == "policy" ]; then
+  if [ "${arg1}" == "view" ]; then
+    echo "==== Policy for EKS admin role ===="
+    echo $(get_assume_role_policy_json) | jq .
+    echo ""
+
+    echo "==== Policy for attaching to EKS admin role ===="
+    echo $(get_eks_cluster_creator_policy_json) | jq .
+    echo ""
+
+  elif [ "${arg1}" == "generate" ]; then
+    echo "==== Policy for EKS admin role ===="
+    echo $(get_assume_role_policy_json) | jq . | tee "${assume_role_policy_json_file_path}"
+    echo "To >>> ${assume_role_policy_json_file_path}"
+    echo ""
+
+    echo "==== Policy for attaching to EKS admin role ===="
+    echo $(get_eks_cluster_creator_policy_json) | jq . | tee "${eks_cluster_creator_policy_json_path}"
+    echo "To >>> ${eks_cluster_creator_policy_json_path}"
+    echo ""
+    
+  else
+    cat <<EOS
+
+Usage:
+  ${cmdname} ${command} ACTION
+
+ACTION:
+  view         View role's policies
+  generate     Generate role's policies to file
+
+EOS
+    exit 1
+  fi
+elif [ "${command}" == "role" ]; then
+  if [ "${arg1}" == "create" ]; then
+    create_eks_admin_role
+  elif [ "${arg1}" == "delete" ]; then
+    delete_eks_admin_role
+  else
+    if [ "${arg1}" == "" ]; then
+      echo "ROLE is required" >&2
+    else
+      echo "ROLE ${arg1} is not supported" >&2
+    fi
+    cat <<EOS
+
+Usage:
+  ${cmdname} ${command} ACTION
+
+ACTION:
+  create       Create Role for eks administrator
+  delete       Delete Role for eks administrator
+
+EOS
+    exit 1
+  fi
+
+elif [ "${command}" == "cluster" ]; then
+  if [ "${arg1}" != "up" -a "${arg1}" != "down" ]; then
+    cat <<EOS
+
+Usage:
+  ${cmdname} ${command} ACTION
+
+ACTION:
+  up           Create EKS cluster
+  down         Delete EKS cluster
+
+EOS
+    exit 1
+  else
+    credentials=$(get_credential_vars_for_eksadmin)
+
+    if [ "${credentials}" == "" ]; then
+      echo "Failed to get credentials. Please login to AWS" >&2
+      echo -e "You can execute \`${green}${cmdname} login${textreset}\` command" >&2
+      exit 1
+    fi
+
+    AWS_ACCESS_KEY_ID=$(echo ${credentials} | jq -r '.AccessKeyId')
+    AWS_SECRET_ACCESS_KEY=$(echo ${credentials} | jq -r '.SecretAccessKey')
+    AWS_SESSION_TOKEN=$(echo ${credentials} | jq -r '.SessionToken')
+
+    if [ "${arg1}" == "up" ]; then
+      if [ ! -f "${ssh_public_key_path}" ]; then
+        echo "Failed to find ssh public key in ${ssh_public_key_path}" >&2
+        echo -e "Generate ssh key by \`${green}ssh-keygen${textreset}\` command" >&2
+        exit 1
+      fi
+
+      # Create an EKS cluster
+      eksctl create cluster \
+        --name ${eks_cluster_name} \
+        --version ${eks_version} \
+        --region ${eks_cluster_region} \
+        --nodegroup-name ${eks_cluster_nodegroup_name} \
+        --node-type ${eks_cluster_node_instance_type} \
+        --nodes ${eks_cluster_nodes_num} \
+        --nodes-min ${eks_cluster_nodes_min} \
+        --nodes-max ${eks_cluster_nodes_max} \
+        --ssh-access \
+        --ssh-public-key ${ssh_public_key_path} \
+        --managed
+
+      do_mapping_iam_and_clusterrole
+      update_kubeconfig
+
+    elif [ "${arg1}" == "down" ]; then
+      # Detete EKS cluster
+      eksctl delete cluster --name ${eks_cluster_name}
+    else
+      echo "Failed to operaton" >&2
+    fi
+  fi
+else
+  usage
+fi
+
