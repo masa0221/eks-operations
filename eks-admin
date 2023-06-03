@@ -392,6 +392,7 @@ EOS
       exit 1
     fi
 
+    # This will allow the eksctl to utilize these credentials
     export AWS_ACCESS_KEY_ID=$(echo ${credentials} | jq -r '.AccessKeyId')
     export AWS_SECRET_ACCESS_KEY=$(echo ${credentials} | jq -r '.SecretAccessKey')
     export AWS_SESSION_TOKEN=$(echo ${credentials} | jq -r '.SessionToken')
@@ -417,7 +418,7 @@ EOS
         --ssh-public-key ${ssh_public_key_path} \
         --managed
 
-      if [ $0 == 0 ]; then
+      if [ $? == 0 ]; then
         do_mapping_iam_and_clusterrole
         update_kubeconfig
       fi
