@@ -392,9 +392,9 @@ EOS
       exit 1
     fi
 
-    AWS_ACCESS_KEY_ID=$(echo ${credentials} | jq -r '.AccessKeyId')
-    AWS_SECRET_ACCESS_KEY=$(echo ${credentials} | jq -r '.SecretAccessKey')
-    AWS_SESSION_TOKEN=$(echo ${credentials} | jq -r '.SessionToken')
+    export AWS_ACCESS_KEY_ID=$(echo ${credentials} | jq -r '.AccessKeyId')
+    export AWS_SECRET_ACCESS_KEY=$(echo ${credentials} | jq -r '.SecretAccessKey')
+    export AWS_SESSION_TOKEN=$(echo ${credentials} | jq -r '.SessionToken')
 
     if [ "${arg1}" == "up" ]; then
       if [ ! -f "${ssh_public_key_path}" ]; then
@@ -417,8 +417,10 @@ EOS
         --ssh-public-key ${ssh_public_key_path} \
         --managed
 
-      do_mapping_iam_and_clusterrole
-      update_kubeconfig
+      if [ $0 == 0 ]; then
+        do_mapping_iam_and_clusterrole
+        update_kubeconfig
+      fi
 
     elif [ "${arg1}" == "down" ]; then
       # Detete EKS cluster

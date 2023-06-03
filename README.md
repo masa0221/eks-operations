@@ -2,6 +2,10 @@ eks-admin tools
 ==============
 This tool is for EKS cluster.
 
+If you're interested in infrastructure as Code(IaC), I would recommend using Terraform.  
+This tool is specifically designed for learning about EKS.
+
+
 ## How to use
 
 ### 1. Generate SSO account on AWS
