@@ -36,14 +36,14 @@ NOTE: This step is necessary to operate IAM resourece
 ```
 $ eks-admin role create 
 ```
-NOTE: This involves three steps. First, we're create the role, then we creating the policy to attach to the role. Finally, we attach the policy to the role.
-The eksadmin user only can assume the role that made in this step.
+NOTE: This command involves three steps. First, we're create the role, then we creating the policy to attach to the role. Finally, we attach the policy to the role.
+The role created in this step is configured to only allow the eksadmin to assume it.
 
 #### 3.3 Create an EKS cluster
 ```
 $ eks-admin login eksadmin
 ```
-NOTE: The eksadmin can be assume a EKS creator role that can create EKS cluster.
+NOTE: The eksadmin is the only role that can assume the intented role.
 
 ```
 $ eks-admin cluster up
