@@ -8,7 +8,7 @@ This tool is specifically designed for learning about EKS.
 
 ## How to use
 
-### 1. Generate SSO account on AWS
+### 1. Set up an SSO account on AWS
 Enable the AWS Identity Center and create permission sets for both AWS administrator and EKS administrator.
 
 
