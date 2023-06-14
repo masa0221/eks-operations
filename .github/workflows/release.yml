@@ -18,3 +18,4 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: ${{ github.workspace }}/eks-admin
+          overwrite: true
