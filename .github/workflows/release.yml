@@ -24,3 +24,5 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: ${{ github.workspace }}/eks-admin
           overwrite: true
+          asset_name: eks-admin
+          tag: ${{ github.ref }}
