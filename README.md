@@ -5,6 +5,16 @@ This tool is for EKS cluster.
 If you're interested in infrastructure as Code(IaC), I would recommend using Terraform.  
 This tool is specifically designed for learning about EKS.
 
+## Installation
+### Homebrew
+```
+brew tap masa0221/tap && brew install eks-admin
+```
+
+### Manual install
+```sh
+sudo curl -s https://raw.githubusercontent.com/masa0221/eks-operations/HEAD/eks-admin -o /usr/local/bin/eks-admin && chmod +x /usr/local/bin/eks-admin
+```
 
 ## How to use
 
@@ -19,41 +29,41 @@ You can modify parameters for EKS operation in the ./eks-admin file.
 ### 3. Create an EKS cluster
 #### 3.1 Generate the required policies
 ```
-$ eks-admin login eksadmin
+eks-admin login eksadmin
 ```
 NOTE: This step is necessary to obtain the eksadmin identity.
 
 ```
-$ eks-admin policy generate
+eks-admin policy generate
 ```
 
 #### 3.2 Create the EKS creator role and attach the policy for the EKS creator
 ```
-$ eks-admin login admin
+eks-admin login admin
 ```
 NOTE: This step is necessary to operate IAM resourece
 
 ```
-$ eks-admin role create 
+eks-admin role create 
 ```
 NOTE: This command involves three steps. First, we're create the role, then we creating the policy to attach to the role. Finally, we attach the policy to the role.
 The role created in this step is configured to only allow the eksadmin to assume it.
 
 #### 3.3 Create an EKS cluster
 ```
-$ eks-admin login eksadmin
+eks-admin login eksadmin
 ```
 NOTE: The eksadmin is the only role that can assume the intented role.
 
 ```
-$ eks-admin cluster up
+eks-admin cluster up
 ```
 NOTE: It takes approximately 15 minutes.
 
 
 ### 4. Delete EKS cluster
 ```
-$ eks-admin cluster down
+eks-admin cluster down
 ```
  
 
