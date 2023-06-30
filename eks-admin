@@ -251,6 +251,65 @@ update_kubeconfig() {
   aws eks update-kubeconfig --name ${eks_cluster_name} --profile ${aws_profile_eks_admin}
 }
 
+create_irsa() {
+  eks_irsa_namespace="default"
+
+  shift 2
+  while getopts h-: OPT
+  do
+    if [ ${OPT} == "-" ]; then
+      OPT=${OPTARG%%=*}
+      OPTARG=${OPTARG##*=}
+    fi
+
+    case ${OPT} in
+      h|help)
+        usage_create_irsa
+        ;;
+      name)
+        eks_irsa_name="$OPTARG"
+        ;;
+      namespace)
+        eks_irsa_namespace="$OPTARG"
+        ;;
+      policy-arn)
+        eks_irsa_attach_policy_arn="$OPTARG"
+        ;;
+    esac
+  done
+  shift $(expr $OPTIND - 1)
+
+  if [ "${eks_irsa_name}" == "" -o "${eks_irsa_attach_policy_arn}" == "" ]; then
+    echo "There are no required flags specified. Please provide the required flags." >&2
+    usage_create_irsa
+    exit 1
+  fi
+
+  # 1. Create an IAM OIDC identity provider for your cluster
+  # @see https://docs.aws.amazon.com/eks/latest/userguide/enable-iam-roles-for-service-accounts.html
+  eksctl utils associate-iam-oidc-provider --cluster ${eks_cluster_name} --region ${eks_cluster_region} --approve
+
+  # 2. Create an IAM role and associate it with a Kubernetes service account
+  # @see https://docs.aws.amazon.com/eks/latest/userguide/associate-service-account-role.html
+  eksctl create iamserviceaccount --cluster ${eks_cluster_name} --region ${eks_cluster_region} --namespace ${eks_irsa_namespace} --name ${eks_irsa_name} --attach-policy-arn ${eks_irsa_attach_policy_arn} --approve
+}
+
+usage_create_irsa() {
+    cat <<EOS
+
+Usage:
+  ${cmdname} cluster irsa --name=NAME --policy-arn=arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+
+Require flags:
+  --name             The name of the service account to be created
+  --policy-arn       The arn of the IAM Policy to be attached to created IAM role (e.g. arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess )
+
+Options:
+  --namespace        The namespace in which the service account will be created (if not specified, set it to 'default')
+
+EOS
+}
+
 
 ################
 # options
@@ -371,15 +430,16 @@ EOS
   fi
 
 elif [ "${command}" == "cluster" ]; then
-  if [ "${arg1}" != "up" -a "${arg1}" != "down" ]; then
+  if [ "${arg1}" != "up" -a "${arg1}" != "down" -a "${arg1}" != "irsa" ]; then
     cat <<EOS
 
 Usage:
   ${cmdname} ${command} ACTION
 
 ACTION:
-  up           Create EKS cluster
-  down         Delete EKS cluster
+  up           Create an EKS cluster
+  down         Delete an EKS cluster
+  irsa         Create an IAM Role and Service Acccount for IRSA(IAM Role for Service Account)
 
 EOS
     exit 1
@@ -426,6 +486,8 @@ EOS
     elif [ "${arg1}" == "down" ]; then
       # Detete EKS cluster
       eksctl delete cluster --name ${eks_cluster_name}
+    elif [ "${arg1}" == "irsa" ]; then
+      create_irsa $@
     else
       echo "Failed to operaton" >&2
     fi
